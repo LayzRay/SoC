@@ -1,0 +1,311 @@
+`define FIRST_BYTE 7:0
+`define SECOND_BYTE 15:8
+`define THIRD_BYTE 23:16
+`define FOURTH_BYTE 31:24
+
+module kuznechik_cipher_apb_wrapper(
+
+    // Clock
+    input  logic            pclk_i,
+
+    // Reset
+    input  logic            presetn_i,
+
+    // Address
+    input  logic     [31:0] paddr_i,
+
+    // Control-status
+    input  logic            psel_i,
+    input  logic            penable_i,
+    input  logic            pwrite_i,
+
+    // Write
+    input  logic [3:0][7:0] pwdata_i,
+    input  logic      [3:0] pstrb_i,
+
+    // Slave
+    output logic            pready_o,
+    output logic     [31:0] prdata_o,
+    output logic            pslverr_o
+
+);
+    
+
+    ////////////////////
+    // Design package //
+    ////////////////////
+
+    import kuznechik_cipher_apb_wrapper_pkg::*;
+
+
+    //////////////////////////
+    // Cipher instantiation //
+    //////////////////////////
+
+    logic [ 3:0 ] [ 31:0 ] data_in_reg, data_out_reg;
+    logic [ 3:0 ] [ 7:0 ] control_in_reg;
+
+    // Instantiation
+    Kuznechik cipher(
+        .clk_i      (  pclk_i  ),
+        .resetn_i   (  presetn_i & control_in_reg[ RST ][ 0 ] ),
+        .request_i  (  control_in_reg[ REQ_ACK ][ 0 ]  ),
+        .ack_i      (  control_in_reg[ REQ_ACK ][ 1 ]  ),
+        .data_i     (  data_in_reg  ),
+        .busy_o     (  control_in_reg[ BUSY ][ 0 ]  ),
+        .valid_o    (  control_in_reg[ VALID ][ 0 ]  ),
+        .data_o     (  data_out_reg  )
+    );
+    
+    logic [ 1:0 ] state;
+    
+    parameter IDLE = 2'b00;
+    parameter READ = 2'b01;
+    parameter WRITE = 2'b10;
+    
+
+    always_ff @( posedge pclk_i )
+    
+        if ( !presetn_i ) begin
+        
+            state <= IDLE;
+            pready_o <= 1'b0;
+            pslverr_o <= 1'b0;
+            
+            prdata_o <= 32'dZ;
+            
+            data_in_reg <= 128'd0;
+            control_in_reg <= 32'd0;
+        
+        end else
+    
+            case ( state )
+            
+                IDLE: begin
+                
+                    pslverr_o <= 1'b0;
+                
+                    if ( psel_i ) begin
+                    
+                        state <= pwrite_i ? WRITE : READ;
+                        pready_o <= 1'b0;
+                        
+                    end
+                    
+                end
+                
+                WRITE: begin pslverr_o <= 1'b0; pready_o <= 1'b0; if ( penable_i ) begin
+
+                    case ( paddr_i )
+                    
+                        32'h0000_0000:
+                        
+                            case ( pstrb_i )
+                            
+                                4'b0000: control_in_reg <= control_in_reg;                              
+                                4'b0001: control_in_reg[ RST ][ 0 ] <= pwdata_i[ RST ][ 0 ];
+                                
+                                4'b0010: //if ( !control_in_reg[ BUSY ][ 0 ] ) 
+                                            control_in_reg[ REQ_ACK ][ 1:0 ] <= pwdata_i[ REQ_ACK ][ 1:0 ];
+                                         //else
+                                            //pslverr_o <= 1'b1;
+                                
+                                4'b0011: begin
+                                
+                                       // if ( !control_in_reg[ BUSY ] ) begin
+                                        
+                                            control_in_reg[ RST ][ 0 ] <= pwdata_i[ RST ][ 0 ];
+                                            control_in_reg[ REQ_ACK ][ 1:0 ] <= pwdata_i[ REQ_ACK ][ 1:0 ];
+                                        
+                                        //end else
+                                            //pslverr_o <= 1'b1;
+                                end
+                               
+                               default: pslverr_o <= 1'b1;
+                            
+                            endcase
+                            
+                        32'h0000_0004: 
+                            case ( pstrb_i )
+                            
+                                4'b0000: data_in_reg[ 0 ] <= data_in_reg[ 0 ];
+                                
+                                4'b0001: data_in_reg[ 0 ][ `FIRST_BYTE   ] <= pwdata_i[ 0 ];
+                                4'b0010: data_in_reg[ 0 ][ `SECOND_BYTE  ] <= pwdata_i[ 1 ];
+                                4'b0100: data_in_reg[ 0 ][ `THIRD_BYTE ] <= pwdata_i[ 2 ];
+                                4'b1000: data_in_reg[ 0 ][ `FOURTH_BYTE ] <= pwdata_i[ 3 ];
+                                
+                                4'b0011: data_in_reg[ 0 ][ 15:0  ] <= pwdata_i[ 1:0 ];
+                                4'b0110: data_in_reg[ 0 ][ 23:8  ] <= pwdata_i[ 2:1 ];
+                                4'b1100: data_in_reg[ 0 ][ 31:16 ] <= pwdata_i[ 3:2 ];
+                                
+                                4'b0101: data_in_reg[ 0 ] <= { data_in_reg[ 0 ][ `FOURTH_BYTE ], pwdata_i[ 2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                4'b1010: data_in_reg[ 0 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1 ], data_in_reg[ 0 ][ `FIRST_BYTE ] };
+                                
+                                4'b1001: data_in_reg[ 0 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b0111: data_in_reg[ 0 ][ 23:0 ] <= pwdata_i[ 2:0 ];
+                                4'b1110: data_in_reg[ 0 ][ 31:8 ] <= pwdata_i[ 3:1 ];
+                                
+                                4'b1011: data_in_reg[ 0 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1:0 ] };
+                                4'b1101: data_in_reg[ 0 ] <= { pwdata_i[ 3:2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b1111: data_in_reg[ 0 ] <= pwdata_i;
+                            
+                            endcase
+                            
+                        32'h0000_0008: 
+                            case ( pstrb_i )
+                            
+                                4'b0000: data_in_reg[ 1 ] <= data_in_reg[ 1 ];
+                                
+                                4'b0001: data_in_reg[ 1 ][ `FIRST_BYTE   ] <= pwdata_i[ 0 ];
+                                4'b0010: data_in_reg[ 1 ][ `SECOND_BYTE  ] <= pwdata_i[ 1 ];
+                                4'b0100: data_in_reg[ 1 ][ `THIRD_BYTE ] <= pwdata_i[ 2 ];
+                                4'b1000: data_in_reg[ 1 ][ `FOURTH_BYTE ] <= pwdata_i[ 3 ];
+                                
+                                4'b0011: data_in_reg[ 1 ][ 15:0  ] <= pwdata_i[ 1:0 ];
+                                4'b0110: data_in_reg[ 1 ][ 23:8  ] <= pwdata_i[ 2:1 ];
+                                4'b1100: data_in_reg[ 1 ][ 31:16 ] <= pwdata_i[ 3:2 ];
+                                
+                                4'b0101: data_in_reg[ 1 ] <= { data_in_reg[ 0 ][ `FOURTH_BYTE ], pwdata_i[ 2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                4'b1010: data_in_reg[ 1 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1 ], data_in_reg[ 0 ][ `FIRST_BYTE ] };
+                                
+                                4'b1001: data_in_reg[ 1 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b0111: data_in_reg[ 1 ][ 23:0 ] <= pwdata_i[ 2:0 ];
+                                4'b1110: data_in_reg[ 1 ][ 31:8 ] <= pwdata_i[ 3:1 ];
+                                
+                                4'b1011: data_in_reg[ 1 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1:0 ] };
+                                4'b1101: data_in_reg[ 1 ] <= { pwdata_i[ 3:2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b1111: data_in_reg[ 1 ] <= pwdata_i;
+                            
+                            endcase
+                            
+                        32'h0000_000C: 
+                            case ( pstrb_i )
+                            
+                                4'b0000: data_in_reg[ 2 ] <= data_in_reg[ 2 ];
+                                
+                                4'b0001: data_in_reg[ 2 ][ `FIRST_BYTE   ] <= pwdata_i[ 0 ];
+                                4'b0010: data_in_reg[ 2 ][ `SECOND_BYTE  ] <= pwdata_i[ 1 ];
+                                4'b0100: data_in_reg[ 2 ][ `THIRD_BYTE ] <= pwdata_i[ 2 ];
+                                4'b1000: data_in_reg[ 2 ][ `FOURTH_BYTE ] <= pwdata_i[ 3 ];
+                                
+                                4'b0011: data_in_reg[ 2 ][ 15:0  ] <= pwdata_i[ 1:0 ];
+                                4'b0110: data_in_reg[ 2 ][ 23:8  ] <= pwdata_i[ 2:1 ];
+                                4'b1100: data_in_reg[ 2 ][ 31:16 ] <= pwdata_i[ 3:2 ];
+                                
+                                4'b0101: data_in_reg[ 2 ] <= { data_in_reg[ 0 ][ `FOURTH_BYTE ], pwdata_i[ 2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                4'b1010: data_in_reg[ 2 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1 ], data_in_reg[ 0 ][ `FIRST_BYTE ] };
+                                
+                                4'b1001: data_in_reg[ 2 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b0111: data_in_reg[ 2 ][ 23:0 ] <= pwdata_i[ 2:0 ];
+                                4'b1110: data_in_reg[ 2 ][ 31:8 ] <= pwdata_i[ 3:1 ];
+                                
+                                4'b1011: data_in_reg[ 2 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1:0 ] };
+                                4'b1101: data_in_reg[ 2 ] <= { pwdata_i[ 3:2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b1111: data_in_reg[ 2 ] <= pwdata_i;
+                            
+                            endcase
+                            
+                        32'h0000_0010: 
+                            case ( pstrb_i )
+                            
+                                4'b0000: data_in_reg[ 3 ] <= data_in_reg[ 3 ];
+                                
+                                4'b0001: data_in_reg[ 3 ][ `FIRST_BYTE   ] <= pwdata_i[ 0 ];
+                                4'b0010: data_in_reg[ 3 ][ `SECOND_BYTE  ] <= pwdata_i[ 1 ];
+                                4'b0100: data_in_reg[ 3 ][ `THIRD_BYTE ] <= pwdata_i[ 2 ];
+                                4'b1000: data_in_reg[ 3 ][ `FOURTH_BYTE ] <= pwdata_i[ 3 ];
+                               
+                                4'b0011: data_in_reg[ 3 ][ 15:0  ] <= pwdata_i[ 1:0 ];
+                                4'b0110: data_in_reg[ 3 ][ 23:8  ] <= pwdata_i[ 2:1 ];
+                                4'b1100: data_in_reg[ 3 ][ 31:16 ] <= pwdata_i[ 3:2 ];
+                                
+                                4'b0101: data_in_reg[ 3 ] <= { data_in_reg[ 0 ][ `FOURTH_BYTE ], pwdata_i[ 2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                4'b1010: data_in_reg[ 3 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1 ], data_in_reg[ 0 ][ `FIRST_BYTE ] };
+                                
+                                4'b1001: data_in_reg[ 3 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b0111: data_in_reg[ 3 ][ 23:0 ] <= pwdata_i[ 2:0 ];
+                                4'b1110: data_in_reg[ 3 ][ 31:8 ] <= pwdata_i[ 3:1 ];
+                               
+                                4'b1011: data_in_reg[ 3 ] <= { pwdata_i[ 3 ], data_in_reg[ 0 ][ `THIRD_BYTE ], pwdata_i[ 1:0 ] };
+                                4'b1101: data_in_reg[ 3 ] <= { pwdata_i[ 3:2 ], data_in_reg[ 0 ][ `SECOND_BYTE ], pwdata_i[ 0 ] };
+                                
+                                4'b1111: data_in_reg[ 3 ] <= pwdata_i;
+                            
+                            endcase
+                            
+                            default: begin
+                            
+                                pslverr_o <= 1'b1;
+                            
+                            end
+                    
+                    endcase
+                    
+                    pready_o <= 1'b1;
+                    
+                    if ( psel_i ) begin
+                    
+                        state <= pwrite_i ? WRITE : READ;
+                        
+                    end else
+                       
+                        state <= IDLE;
+                
+                end else if ( psel_i ) begin
+                    
+                        state <= pwrite_i ? WRITE : READ;
+                        
+                    end end
+            
+                READ: begin pslverr_o <= 1'b0; pready_o <= 1'b0; if ( penable_i ) begin
+                 
+                    
+                    case ( paddr_i )
+                   
+                        32'h0000_0004: prdata_o <= data_in_reg[ 0 ];
+                        32'h0000_0008: prdata_o <= data_in_reg[ 1 ];
+                        32'h0000_000C: prdata_o <= data_in_reg[ 2 ];
+                        32'h0000_0010: prdata_o <= data_in_reg[ 3 ];
+                        
+                        32'h0000_0014: prdata_o <= data_out_reg[ 0 ];
+                        32'h0000_0018: prdata_o <= data_out_reg[ 1 ];
+                        32'h0000_001C: prdata_o <= data_out_reg[ 2 ];
+                        32'h0000_0020: prdata_o <= data_out_reg[ 3 ];
+                        
+                        32'h0000_0000: prdata_o <= control_in_reg;
+                        
+                        default: begin
+                            
+                            pslverr_o <= 1'b1;
+                            
+                        end
+                   
+                    endcase
+                    
+                    pready_o <= 1'b1;
+                    
+                    if ( psel_i ) begin
+                    
+                        state <= pwrite_i ? WRITE : READ;    
+                        
+                    end else
+                       
+                        state <= IDLE;
+                
+                end else if ( psel_i ) begin
+                    
+                        state <= pwrite_i ? WRITE : READ;
+                        
+                    end end
+            
+            endcase
+    
+endmodule
