@@ -229,8 +229,8 @@ module peripherals
      .fll_master        ( s_fll_bus        ),
      .soc_ctrl_master   ( s_soc_ctrl_bus   ),
      .debug_master      ( s_debug_bus      ),
-     .cipher_master     ( s_cipher_bus     ),
-     .fft_master     ( s_fft_bus     )
+     .cipher_master     ( s_cipher_bus     )
+     
   );
 
   //////////////////////////////////////////////////////////////////
